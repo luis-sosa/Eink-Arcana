@@ -71,7 +71,8 @@
       letter-spacing: 1px;
       cursor: pointer;
     }
-    .draw:active { border-width: 6px; padding: 9px; }
+    .draw:active, .draw.holding { border-width: 6px; padding: 9px; }
+    .draw, .cardBtn { touch-action: none; -webkit-touch-callout: none; }
     .draw:focus-visible, .cardBtn:focus-visible { outline: 3px dashed var(--fg); outline-offset: 3px; }
 
     .cardBtn {
@@ -119,13 +120,13 @@
 </head>
 <body>
   <div class="wrap">
-    <button class="cardBtn" id="cardBtn" type="button" aria-label="Draw a card"></button>
+    <button class="cardBtn" id="cardBtn" type="button" aria-label="Card"></button>
     <section class="reading" aria-live="polite">
-      <h2 id="cardName">The deck is shuffled</h2>
-      <p id="cardDesc">Tap the button or the card to draw from the 22 cards of the Major Arcana.</p>
+      <h2 id="cardName">The deck is ready</h2>
+      <p id="cardDesc">Hold the button or the card to shuffle. Let go when it feels right, then turn the card over.</p>
       <p class="keywords" id="cardKeywords"></p>
     </section>
-    <button class="draw" id="drawBtn" type="button">Draw a card</button>
+    <button class="draw" id="drawBtn" type="button">Hold to shuffle</button>
   </div>
 
   <script>
@@ -571,26 +572,130 @@
     }
 
     const cardBtn = document.getElementById("cardBtn");
+    const drawBtn = document.getElementById("drawBtn");
     const nameEl = document.getElementById("cardName");
     const descEl = document.getElementById("cardDesc");
     const kwEl = document.getElementById("cardKeywords");
-    let lastIndex = -1;
 
-    // Every write happens in one synchronous handler, so the panel repaints once per tap
-    function draw() {
-      let i;
-      do { i = Math.floor(Math.random() * deck.length); } while (i === lastIndex);
-      lastIndex = i;
-      const card = deck[i];
-      cardBtn.innerHTML = cardSVG(card.no, card.name, art[i](), card.name);
-      nameEl.textContent = card.name;
-      descEl.textContent = card.desc;
-      kwEl.textContent = card.keywords;
+    const RIFFLE_MS = 220;
+    const MIN_RIFFLES = 3;
+    const STORE = "tarot-deck-order";
+
+    // The deck keeps its order between sessions, like a physical deck left on the table
+    function loadOrder() {
+      try {
+        const o = JSON.parse(localStorage.getItem(STORE));
+        if (Array.isArray(o) && o.length === deck.length && new Set(o).size === deck.length &&
+            o.every(n => Number.isInteger(n) && n >= 0 && n < deck.length)) return o;
+      } catch (e) {}
+      return deck.map((_, i) => i);
+    }
+    function saveOrder() {
+      try { localStorage.setItem(STORE, JSON.stringify(deckOrder)); } catch (e) {}
     }
 
-    cardBtn.innerHTML = cardSVG("✦", "Major Arcana", backArt(), "Card back");
-    document.getElementById("drawBtn").addEventListener("click", draw);
-    cardBtn.addEventListener("click", draw);
+    // One riffle: cut the deck roughly in half, then drop cards from each half in proportion to its size
+    function riffle(order) {
+      let cut = 0;
+      for (let i = 0; i < order.length; i++) if (Math.random() < 0.5) cut++;
+      const a = order.slice(0, cut), b = order.slice(cut), out = [];
+      while (a.length || b.length) {
+        out.push(Math.random() * (a.length + b.length) < a.length ? a.shift() : b.shift());
+      }
+      return out;
+    }
+
+    const buzz = pattern => { try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) {} };
+
+    let deckOrder = loadOrder();
+    let state = "idle";
+    let timer = null, riffles = 0, revealArmed = false;
+
+    function showBack(label) { cardBtn.innerHTML = cardSVG("✦", label, backArt(), "Card back"); }
+    function setReading(name, desc, kw = "") {
+      nameEl.textContent = name;
+      descEl.textContent = desc;
+      kwEl.textContent = kw;
+    }
+
+    function startShuffle() {
+      if (state === "shuffling") return;
+      state = "shuffling";
+      riffles = 0;
+      revealArmed = false;
+      showBack("Shuffling");
+      drawBtn.classList.add("holding");
+      drawBtn.textContent = "Shuffling…";
+      // Only the button label changes while shuffling, so each riffle repaints a small area
+      timer = setInterval(() => {
+        deckOrder = riffle(deckOrder);
+        riffles++;
+        drawBtn.textContent = `Shuffling · ${riffles}`;
+        buzz(8);
+      }, RIFFLE_MS);
+    }
+
+    function stopShuffle() {
+      if (state !== "shuffling") return;
+      clearInterval(timer);
+      timer = null;
+      drawBtn.classList.remove("holding");
+      saveOrder();
+      if (riffles < MIN_RIFFLES) {
+        state = "idle";
+        showBack("Major Arcana");
+        drawBtn.textContent = "Hold to shuffle";
+        setReading("Keep holding", "Hold a little longer to shuffle, and let go when it feels right.");
+        return;
+      }
+      state = "pulled";
+      buzz(25);
+      showBack("Tap to turn");
+      drawBtn.textContent = "Hold to shuffle again";
+      setReading("Card pulled", `You stopped after ${riffles} riffles. Tap the card to turn it over.`);
+    }
+
+    function reveal() {
+      const i = deckOrder[0];
+      const card = deck[i];
+      cardBtn.innerHTML = cardSVG(card.no, card.name, art[i](), card.name);
+      setReading(card.name, card.desc, card.keywords);
+      deckOrder = deckOrder.slice(1).concat(i);
+      saveOrder();
+      state = "revealed";
+      buzz([20, 40, 20]);
+      drawBtn.textContent = "Hold to shuffle";
+    }
+
+    function bindHold(el, isCard) {
+      el.addEventListener("pointerdown", e => {
+        if (isCard && state === "pulled") { revealArmed = true; return; }
+        if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+        startShuffle();
+      });
+      const end = () => {
+        if (isCard && state === "pulled" && revealArmed) { revealArmed = false; reveal(); return; }
+        stopShuffle();
+      };
+      el.addEventListener("pointerup", end);
+      el.addEventListener("pointercancel", end);
+      el.addEventListener("contextmenu", e => e.preventDefault());
+    }
+
+    bindHold(drawBtn, false);
+    bindHold(cardBtn, true);
+
+    drawBtn.addEventListener("keydown", e => {
+      if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); startShuffle(); }
+    });
+    drawBtn.addEventListener("keyup", e => {
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); stopShuffle(); }
+    });
+    cardBtn.addEventListener("keydown", e => {
+      if ((e.key === " " || e.key === "Enter") && state === "pulled") { e.preventDefault(); reveal(); }
+    });
+
+    showBack("Major Arcana");
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});

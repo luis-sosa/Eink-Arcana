@@ -1,5 +1,5 @@
 // Bump the version whenever you change any file, so installed copies pick up the update
-const CACHE = "tap-tarot-v2";
+const CACHE = "tap-tarot-v3";
 const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", event => {
