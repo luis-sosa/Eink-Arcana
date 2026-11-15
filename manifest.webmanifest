@@ -1,7 +1,7 @@
 {
   "name": "Tap Tarot",
   "short_name": "Tarot",
-  "description": "Draw a card from the Major Arcana.",
+  "description": "Shuffle, pull, and turn a card from a 78-card tarot deck.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
